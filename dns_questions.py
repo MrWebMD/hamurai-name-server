@@ -1,6 +1,9 @@
+from resource_record import ResourceRecord, RrType, RrClass, create_ipv4_address_rdata
+
 dns_question_template = '''QNAME: {}
 QTYPE: {}
-QCLASS: {}'''
+QCLASS: {}
+OFFSET: {}'''
 
 dns_questions_section_template = '''
 DECODED QUESTIONS SECTION:
@@ -12,10 +15,20 @@ RAW QUESTIONS SECTION:
 
 
 class DnsQuestion:
-    def __init__(self, qname: str, qtype: int, qclass: int):
+    def __init__(self, qname: str, qtype: RrType, qclass: RrClass, offset_in_message: int):
         self.qname = qname
         self.qtype = qtype
         self.qclass = qclass
+        self.label_pointer = offset_in_message
+
+    def create_answer(self, rdata: bytearray, ttl):
+        return ResourceRecord(
+            self.get_label_pointer(),
+            self.qtype,
+            self.qclass,
+            ttl,
+            rdata
+        ).build()
 
     def get_name(self) -> str:
 
@@ -44,24 +57,45 @@ class DnsQuestion:
 
         return self.qtype
 
+    def get_label_pointer(self) -> bytearray:
+
+        # In order to reduce the size of messages, the domain system utilizes a
+        # compression scheme which eliminates the repetition of domain names in a
+        # message.  In this scheme, an entire domain name or a list of labels at
+        # the end of a domain name is replaced with a pointer to a prior occurance
+        # of the same name.
+
+        # The pointer takes the form of a two octet sequence:
+
+        # +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+        # | 1  1|                OFFSET                   |
+        # +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+
+        return (0b1100000000000000 + self.label_pointer).to_bytes(2, "big")
+
     def __str__(self) -> str:
         return dns_question_template.format(
             self.get_name(),
             self.get_type(),
-            self.get_class()
+            self.get_class(),
+            self.label_pointer
         )
 
 
 class DnsQuestionsSection:
-    def __init__(self, question_data: bytes, question_count: int):
+    def __init__(self, question_data: bytearray, question_count: int):
 
         self.data = question_data
         self.question_count = question_count
 
+    def get_as_bytes(self) -> bytearray:
+        return self.data
+
     def __str__(self) -> str:
         return dns_questions_section_template.format(
             self.get_first_question().__str__(),
-            self.data.hex()
+            # self.data.hex()
+            bin(int.from_bytes(self.data, "big"))
         )
 
     def get_first_question(self) -> DnsQuestion:
@@ -103,7 +137,7 @@ class DnsQuestionsSection:
             # you the length of the next label
 
             label_length = int.from_bytes(
-                self.data[label_offset:label_offset+1])
+                self.data[label_offset:label_offset+1], "big")
 
             # If the label is a null terminator then, that means the QTYPE and QCLASS
             # fields have started
@@ -137,8 +171,19 @@ class DnsQuestionsSection:
 
         qname = '.'.join(labels)
 
-        qtype = int.from_bytes(self.data[label_offset:label_offset+2])
+        qtype = int.from_bytes(self.data[label_offset:label_offset+2], "big")
 
-        qclass = int.from_bytes(self.data[label_offset+2:label_offset+4])
+        qclass = int.from_bytes(self.data[label_offset+2:label_offset+4], "big")
 
-        return DnsQuestion(qname, qtype, qclass)
+        # The start of the first questions label is immediately after the 12 byte header.
+        # This offset will be used to reference these labels without having to re-write
+        # their data again in the answer section
+
+        offset_in_message = 12
+
+        return DnsQuestion(
+            qname,
+            RrType(qtype),
+            RrClass(qclass),
+            offset_in_message
+        )

@@ -1,5 +1,5 @@
 from textwrap import wrap
-
+from enum import Enum
 dns_header_template = '''**************** RAW DNS HEADER ****************
 {}
 **************** DECODED HEADER ****************
@@ -14,8 +14,16 @@ RD: {}\t\t\tNSCOUNT: {}
 RA: {}\t\t\tARCOUNT: {}'''
 
 
+class Rcode(Enum):
+    NO_ERROR_CONDITION = 0
+    SERVER_FAILURE = 1
+    NAME_ERROR = 3
+    NOT_IMPLEMENTED = 4
+    REFUSED = 5
+
+
 class DnsHeaderSection:
-    def __init__(self, header_data: bytes):
+    def __init__(self, header_data: bytearray):
 
         # DNS MESSAGE HEADER STARTS AT
         # BYTE 1 AND ENDS AT BYTE 12 INCLUSIVE
@@ -37,13 +45,16 @@ class DnsHeaderSection:
 
         self.data = header_data
 
-        self.header_byte_1_2 = int.from_bytes(self.data[:2])
-        self.header_byte_3 = int.from_bytes(self.data[2:3])
-        self.header_byte_4 = int.from_bytes(self.data[3:4])
-        self.header_byte_5_6 = int.from_bytes(self.data[4:6])
-        self.header_byte_7_8 = int.from_bytes(self.data[6:8])
-        self.header_byte_9_10 = int.from_bytes(self.data[8:10])
-        self.header_byte_10_12 = int.from_bytes(self.data[10:12])
+        self.header_byte_1_2 = int.from_bytes(self.data[:2], "big")
+        self.header_byte_3 = self.data[2]
+        self.header_byte_4 = self.data[3]
+        self.header_byte_5_6 = int.from_bytes(self.data[4:6], "big")
+        self.header_byte_7_8 = int.from_bytes(self.data[6:8], "big")
+        self.header_byte_9_10 = int.from_bytes(self.data[8:10], "big")
+        self.header_byte_10_12 = int.from_bytes(self.data[10:12], "big")
+
+    def get_as_bytes(self) -> bytearray:
+        return self.data
 
     def get_transaction_id(self) -> int:
 
@@ -52,14 +63,24 @@ class DnsHeaderSection:
         # the corresponding reply and can be used by the requester
         # to match up replies to outstanding queries.
 
-        return int.from_bytes(self.data[:2])  # ID
+        return self.header_byte_1_2  # ID
 
     def get_query_or_response(self) -> int:
 
         # A one bit field that specifies whether this
         # message is a query (0), or a response (1).
 
-        return 0b10000000 & self.header_byte_3  # QR
+        return 1 if 0b10000000 & self.header_byte_3 > 0 else 0  # QR
+
+    def set_query_or_response(self, bit_value: int) -> None:
+        flag_byte = self.header_byte_3
+
+        if bit_value == 0:
+            self.header_byte_3 = flag_byte & 0b01111111
+        else:
+            self.header_byte_3 = flag_byte | 0b10000000
+
+        self.data[2] = self.header_byte_3
 
     def get_operation_code(self) -> int:
 
@@ -161,6 +182,18 @@ class DnsHeaderSection:
         except Exception:
             return "Response code doesn't exist"
 
+    def set_response_code(self, rcode: Rcode) -> None:
+
+        rcode_int = Rcode(rcode).value
+
+        new_byte_4_value = (self.data[3] & 0b11110000) + rcode_int
+
+        print('Response code set to {}'.format(bin(new_byte_4_value)))
+
+        self.header_byte_4 = new_byte_4_value
+
+        self.data[3] = new_byte_4_value
+
     def get_question_count(self) -> int:
 
         # Unsigned 16 bit integer specifying the number of
@@ -175,6 +208,10 @@ class DnsHeaderSection:
 
         return self.header_byte_7_8  # ANCOUNT
 
+    def set_answer_count(self, value: int) -> int:
+        self.header_byte_7_8 = value
+        self.data[6:8] = value.to_bytes(2, "big")
+
     def get_name_server_count(self) -> int:
 
         # Unsigned 16 bit integer specifying the number of name
@@ -182,6 +219,11 @@ class DnsHeaderSection:
         # section.
 
         return self.header_byte_9_10  # NSCOUNT
+
+    def set_name_server_count(self, value: int) -> None:
+        ns_count = value.to_bytes(2, "big")
+        self.header_byte_9_10 = value
+        self.data[8:10] = ns_count
 
     def get_additional_record_count(self) -> int:
 
