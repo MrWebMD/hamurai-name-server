@@ -22,6 +22,17 @@ class Rcode(Enum):
     REFUSED = 5
 
 
+class OperationCode(Enum):
+    STANDARD_QUERY = 0  # QUERY
+    INVERSE_QUERY = 1  # IQUERY
+    SERVER_STATUS_REQUEST = 2  # STATUS
+
+
+class QueryOrResponse(Enum):
+    QUERY = 0
+    RESPONSE = 1
+
+
 class DnsHeaderSection:
     def __init__(self, header_data: bytearray):
 
@@ -42,6 +53,9 @@ class DnsHeaderSection:
         # +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
         # |                    ARCOUNT                    |
         # +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+
+        if len(header_data) == 0:
+            header_data = bytearray(b'\0'*12)
 
         self.data = header_data
 
@@ -65,24 +79,33 @@ class DnsHeaderSection:
 
         return self.header_byte_1_2  # ID
 
-    def get_query_or_response(self) -> int:
+    def set_transaction_id(self, transaction_id: int) -> None:
+
+        self.data[:2] = transaction_id.to_bytes(2, "big")
+
+        self.header_byte_1_2 = int.from_bytes(self.data[:2], "big")
+
+        return
+
+    def get_query_or_response(self) -> QueryOrResponse:
 
         # A one bit field that specifies whether this
         # message is a query (0), or a response (1).
 
-        return 1 if 0b10000000 & self.header_byte_3 > 0 else 0  # QR
+        # QR
+        return QueryOrResponse(1 if 0b10000000 & self.header_byte_3 > 0 else 0)
 
-    def set_query_or_response(self, bit_value: int) -> None:
+    def set_query_or_response(self, qr: QueryOrResponse) -> None:
         flag_byte = self.header_byte_3
 
-        if bit_value == 0:
-            self.header_byte_3 = flag_byte & 0b01111111
+        if qr.name == "QUERY":
+            self.header_byte_3 &= 0b01111111
         else:
-            self.header_byte_3 = flag_byte | 0b10000000
+            self.header_byte_3 |= 0b10000000
 
         self.data[2] = self.header_byte_3
 
-    def get_operation_code(self) -> int:
+    def get_operation_code(self) -> OperationCode:
 
         # A four bit field that specifies kind of query in this
         # message.  This value is set by the originator of a query
@@ -93,20 +116,14 @@ class DnsHeaderSection:
         # 2               a server status request (STATUS)
         # 3-15            reserved for future use
 
-        return 0b01111000 & self.header_byte_3  # OPCODE
+        return OperationCode(0b01111000 & self.header_byte_3)  # OPCODE
 
-    def get_operation_code_str(self) -> str:
+    def set_operation_code(self, op_code: OperationCode):
 
-        operation_code_map = {
-            0: "Standard Query (QUERY)",
-            1: "Inverse Query (IQUERY)",
-            2: "Server Status Request (STATUS)"
-        }
+        self.header_byte_3 = (
+            self.header_byte_3 & 0b10000111) + (op_code.value << 3)
 
-        try:
-            return operation_code_map[self.get_operation_code()]
-        except Exception:
-            return "Operation code doesn't exist"
+        self.data[2] = self.header_byte_3
 
     def get_authoritative_answer(self) -> int:
 
@@ -116,6 +133,17 @@ class DnsHeaderSection:
 
         return 0b00000100 & self.header_byte_3  # AA
 
+    def set_authoritative_answer(self, is_authoritative: bool) -> None:
+
+        flag_byte = self.header_byte_3
+
+        if is_authoritative:
+            self.header_byte_3 |= 0b00000100
+        else:
+            self.header_byte_3 &= 0b11111011
+
+        self.data[2] = self.header_byte_3
+
     def get_truncation(self) -> int:
 
         # Specifies that this message was truncated
@@ -123,6 +151,14 @@ class DnsHeaderSection:
         # transmission channel.
 
         return 0b00000010 & self.header_byte_3  # TC
+
+    def set_truncation(self, is_truncated: bool) -> None:
+        if is_truncated:
+            self.header_byte_3 |= 0b00000010
+        else:
+            self.header_byte_3 &= 0b11111101
+
+        self.data[2] = self.header_byte_3
 
     def get_recursion_desired(self) -> int:
 
@@ -133,6 +169,14 @@ class DnsHeaderSection:
 
         return 0b00000001 & self.header_byte_3  # RD
 
+    def set_recursion_desired(self, recursion_desired: bool) -> None:
+        if recursion_desired:
+            self.header_byte_3 |= 0b00000001
+        else:
+            self.header_byte_3 &= 0b11111110
+
+        self.data[2] = self.header_byte_3
+
     def get_recursion_available(self) -> int:
 
         # This be is set or cleared in a
@@ -141,13 +185,27 @@ class DnsHeaderSection:
 
         return 0b10000000 & self.header_byte_4  # RA
 
+    def set_recursion_available(self, recursion_available: bool) -> None:
+        if recursion_available:
+            self.header_byte_4 |= 0b10000000
+        else:
+            self.header_byte_4 &= 0b01111111
+
+        self.data[3] = self.header_byte_4
+
     def get_reserved_z(self) -> int:
 
         # Must always stay zero, reserved for future use
 
         return 0b01110000 & self.header_byte_4  # Z
 
-    def get_response_code(self) -> int:
+    def set_reserved_z(self, z_value: int) -> None:
+
+        self.header_byte_4 &= 0b10001111
+        self.header_byte_4 |= z_value << 4
+        self.data[3] = self.header_byte_4
+
+    def get_response_code(self) -> Rcode:
 
         # 0 = No error condition
 
@@ -165,34 +223,13 @@ class DnsHeaderSection:
 
         # 5 = Refused - The name server refuses to perform the specified operation for policy reasons.
 
-        return 0b00001111 & self.header_byte_4
-
-    def get_response_code_str(self) -> str:
-
-        response_code_map = {
-            0: "No Error Condition",
-            1: "Server Failure",
-            3: "Name Error",
-            4: "Not Implemented",
-            5: "Refused"
-        }
-
-        try:
-            return response_code_map[self.get_response_code()]
-        except Exception:
-            return "Response code doesn't exist"
+        return Rcode(0b00001111 & self.header_byte_4)
 
     def set_response_code(self, rcode: Rcode) -> None:
 
-        rcode_int = Rcode(rcode).value
+        self.header_byte_4 = (self.data[3] & 0b11110000) + Rcode(rcode).value
 
-        new_byte_4_value = (self.data[3] & 0b11110000) + rcode_int
-
-        print('Response code set to {}'.format(bin(new_byte_4_value)))
-
-        self.header_byte_4 = new_byte_4_value
-
-        self.data[3] = new_byte_4_value
+        self.data[3] = self.header_byte_4
 
     def get_question_count(self) -> int:
 
@@ -200,6 +237,11 @@ class DnsHeaderSection:
         # entries in the question section.
 
         return self.header_byte_5_6  # QDCOUNT
+
+    def set_question_count(self, value: int) -> None:
+
+        self.header_byte_5_6 = value
+        self.data[4:6] = value.to_bytes(2, "big")
 
     def get_answer_count(self) -> int:
 
@@ -221,9 +263,8 @@ class DnsHeaderSection:
         return self.header_byte_9_10  # NSCOUNT
 
     def set_name_server_count(self, value: int) -> None:
-        ns_count = value.to_bytes(2, "big")
         self.header_byte_9_10 = value
-        self.data[8:10] = ns_count
+        self.data[8:10] = value.to_bytes(2, "big")
 
     def get_additional_record_count(self) -> int:
 
@@ -237,8 +278,8 @@ class DnsHeaderSection:
         return dns_header_template.format(
             '\n'.join(wrap(self.data.hex(), 48)),
             self.get_transaction_id(),
-            self.get_operation_code_str(),
-            self.get_response_code_str(),
+            self.get_operation_code(),
+            self.get_response_code(),
             self.get_query_or_response(),
             self.get_reserved_z(),
             self.get_authoritative_answer(),
