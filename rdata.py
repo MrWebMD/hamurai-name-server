@@ -46,6 +46,18 @@ class Rdata:
         elif self._type.name == "RAW":
             return self._value
 
+
+# 4.3. The fixed part of an OPT RR is structured as follows:
+
+#      Field Name   Field Type     Description
+#      ------------------------------------------------------
+#      NAME         domain name    empty (root domain)
+#      TYPE         u_int16_t      OPT
+#      CLASS        u_int16_t      sender's UDP payload size
+#      TTL          u_int32_t      extended RCODE and flags
+#      RDLEN        u_int16_t      describes RDATA
+#      RDATA        octet stream   {attribute,value} pairs
+
 # The variable part of an OPT RR may contain zero or more options in
 # the RDATA.  Each option MUST be treated as a bit field.  Each option
 # is encoded as:

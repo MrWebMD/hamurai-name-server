@@ -15,19 +15,29 @@ class DnsQuestionsSection:
 
         self._data = question_data
         self._question_count = question_count
+        self._question: question.DnsQuestion = None
+        self._end_of_first_question_offset = 0
+        self.parse()
 
     @property
     def bytes(self) -> bytearray:
         return self._data
 
+    @property
+    def end_of_first_question_offset(self):
+        return self._end_of_first_question_offset
+
     def __str__(self) -> str:
         return dns_questions_section_template.format(
-            self.first_question.__str__(),
+            self._question.__str__(),
             bin(int.from_bytes(self._data, "big"))
         )
 
     @property
     def first_question(self) -> 'question.DnsQuestion':
+        return self._question
+
+    def parse(self) -> None:
 
         # DNS MESSAGE QUESTION SECTION STARTS AT
         # BYTE 13 AND ENDS WITH A SINGLE NULL TERMINATOR 00 AT THE END
@@ -111,7 +121,9 @@ class DnsQuestionsSection:
 
         # offset_in_message = 12
 
-        return question.DnsQuestion(
+        self._end_of_first_question_offset = label_offset
+
+        self._question = question.DnsQuestion(
             qname,
             resource_record.RrType(qtype),
             resource_record.RrClass(qclass),
